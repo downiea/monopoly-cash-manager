@@ -342,6 +342,16 @@ class PayRentRequest(BaseModel):
 class CollectFreeParkingRequest(BaseModel):
     player_id: int
 
+class SellPropertyRequest(BaseModel):
+    player_id: int
+    property_id: str
+
+class TransferPropertyRequest(BaseModel):
+    from_player_id: int
+    to_player_id: int
+    property_id: str
+    sale_price: Optional[int] = None
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -572,6 +582,73 @@ async def sell_building(request: BuildHouseRequest):
         owned_prop.houses -= 1
         player.cash += sell_value
         return {"message": f"House sold on {prop_data['name']} (now {owned_prop.houses} houses)", "player_cash": player.cash}
+
+@app.post("/properties/sell")
+async def sell_property(request: SellPropertyRequest):
+    if request.player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="Player not found")
+    if request.property_id not in game_state.property_owners:
+        raise HTTPException(status_code=404, detail="Property not owned")
+    if game_state.property_owners[request.property_id] != request.player_id:
+        raise HTTPException(status_code=400, detail="Player does not own this property")
+    
+    owned_prop = game_state.owned_properties[request.property_id]
+    if owned_prop.houses > 0 or owned_prop.has_hotel:
+        raise HTTPException(status_code=400, detail="Must sell all houses/hotels before selling property")
+    
+    prop_data = PROPERTIES_DATA[request.property_id]
+    player = game_state.players[request.player_id]
+    
+    sale_value = prop_data["purchase_cost"]
+    if owned_prop.is_mortgaged:
+        sale_value = prop_data["purchase_cost"] - prop_data["mortgage_value"]
+    
+    player.cash += sale_value
+    del game_state.property_owners[request.property_id]
+    del game_state.owned_properties[request.property_id]
+    
+    return {
+        "message": f"Property {prop_data['name']} sold back to bank for £{sale_value}",
+        "sale_value": sale_value,
+        "player_cash": player.cash
+    }
+
+@app.post("/properties/transfer")
+async def transfer_property(request: TransferPropertyRequest):
+    if request.from_player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="From player not found")
+    if request.to_player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="To player not found")
+    if request.property_id not in game_state.property_owners:
+        raise HTTPException(status_code=404, detail="Property not owned")
+    if game_state.property_owners[request.property_id] != request.from_player_id:
+        raise HTTPException(status_code=400, detail="From player does not own this property")
+    
+    owned_prop = game_state.owned_properties[request.property_id]
+    if owned_prop.houses > 0 or owned_prop.has_hotel:
+        raise HTTPException(status_code=400, detail="Must sell all houses/hotels before transferring property")
+    
+    prop_data = PROPERTIES_DATA[request.property_id]
+    from_player = game_state.players[request.from_player_id]
+    to_player = game_state.players[request.to_player_id]
+    
+    if request.sale_price is not None and request.sale_price > 0:
+        if to_player.cash < request.sale_price:
+            raise HTTPException(status_code=400, detail="Buyer has insufficient funds")
+        to_player.cash -= request.sale_price
+        from_player.cash += request.sale_price
+    
+    game_state.property_owners[request.property_id] = request.to_player_id
+    
+    message = f"Property {prop_data['name']} transferred from {from_player.name} to {to_player.name}"
+    if request.sale_price is not None and request.sale_price > 0:
+        message += f" for £{request.sale_price}"
+    
+    return {
+        "message": message,
+        "from_player_cash": from_player.cash,
+        "to_player_cash": to_player.cash
+    }
 
 def calculate_rent(property_id: str, dice_roll: Optional[int] = None) -> int:
     prop_data = PROPERTIES_DATA[property_id]

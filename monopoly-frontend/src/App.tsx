@@ -6,9 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw } from 'lucide-react'
+import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft } from 'lucide-react'
 
-const API_URL = ''
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 interface Property {
   property_id: string
@@ -73,6 +73,8 @@ function App() {
   const [diceRoll, setDiceRoll] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [transferPropertyTo, setTransferPropertyTo] = useState<string>('')
+  const [transferPropertyPrice, setTransferPropertyPrice] = useState('')
 
   const fetchGameState = useCallback(async () => {
     try {
@@ -140,6 +142,19 @@ function App() {
 
   const sellBuilding = async (playerId: number, propertyId: string) => {
     await handleApiCall('/properties/sell-building', 'POST', { player_id: playerId, property_id: propertyId })
+  }
+
+  const sellProperty = async (playerId: number, propertyId: string) => {
+    await handleApiCall('/properties/sell', 'POST', { player_id: playerId, property_id: propertyId })
+  }
+
+  const transferProperty = async (fromPlayerId: number, toPlayerId: number, propertyId: string, salePrice?: number) => {
+    await handleApiCall('/properties/transfer', 'POST', {
+      from_player_id: fromPlayerId,
+      to_player_id: toPlayerId,
+      property_id: propertyId,
+      sale_price: salePrice,
+    })
   }
 
   const transferMoney = async () => {
@@ -425,6 +440,77 @@ function App() {
                             >
                               Mortgage
                             </Button>
+                          )}
+                          {(prop.houses || 0) === 0 && !prop.has_hotel && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="h-6 text-xs px-2 bg-red-200 hover:bg-red-300"
+                                onClick={() => sellProperty(player.id, prop.property_id)}
+                              >
+                                Sell
+                              </Button>
+                              <Dialog>
+                                <DialogTrigger asChild>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    className="h-6 text-xs px-2 bg-blue-200 hover:bg-blue-300"
+                                    onClick={() => {
+                                      setTransferPropertyTo('')
+                                      setTransferPropertyPrice('')
+                                    }}
+                                  >
+                                    <ArrowRightLeft className="h-3 w-3 mr-1" />
+                                    Transfer
+                                  </Button>
+                                </DialogTrigger>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Transfer {prop.name}</DialogTitle>
+                                  </DialogHeader>
+                                  <div className="space-y-4">
+                                    <div>
+                                      <label className="text-sm text-gray-600">Transfer to:</label>
+                                      <Select value={transferPropertyTo} onValueChange={setTransferPropertyTo}>
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Select player" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {gameState.players
+                                            .filter(p => p.id !== player.id)
+                                            .map(p => (
+                                              <SelectItem key={p.id} value={p.id.toString()}>
+                                                {p.name} (£{p.cash})
+                                              </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div>
+                                      <label className="text-sm text-gray-600">Sale price (optional):</label>
+                                      <Input
+                                        type="number"
+                                        placeholder="£0 for free transfer"
+                                        value={transferPropertyPrice}
+                                        onChange={e => setTransferPropertyPrice(e.target.value)}
+                                      />
+                                    </div>
+                                    <Button
+                                      className="w-full"
+                                      disabled={!transferPropertyTo}
+                                      onClick={() => {
+                                        const price = transferPropertyPrice ? parseInt(transferPropertyPrice) : undefined
+                                        transferProperty(player.id, parseInt(transferPropertyTo), prop.property_id, price)
+                                      }}
+                                    >
+                                      Transfer Property
+                                    </Button>
+                                  </div>
+                                </DialogContent>
+                              </Dialog>
+                            </>
                           )}
                         </div>
                       </div>
