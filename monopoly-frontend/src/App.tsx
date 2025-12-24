@@ -35,6 +35,8 @@ interface GameState {
   players: Player[]
   free_parking_pot: number
   available_properties: Property[]
+  version: string
+  versions: string[]
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -160,7 +162,7 @@ function App() {
   const transferMoney = async () => {
     const amount = parseInt(transferAmount)
     if (isNaN(amount) || amount <= 0) return
-    
+
     await handleApiCall('/transfer', 'POST', {
       from_player_id: transferFrom === 'bank' ? null : parseInt(transferFrom),
       to_player_id: transferTo === 'bank' || transferTo === 'fine' ? null : parseInt(transferTo),
@@ -186,6 +188,10 @@ function App() {
 
   const resetGame = async () => {
     await handleApiCall('/game/reset', 'POST')
+  }
+
+  const setGameVersion = async (version: string) => {
+    await handleApiCall('/game/version', 'POST', { version })
   }
 
   const getPropertyIcon = (type: string) => {
@@ -339,6 +345,38 @@ function App() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2">
+                <Building2 className="h-5 w-5" />
+                Game Version
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Select
+                value={gameState.version}
+                onValueChange={setGameVersion}
+                disabled={gameState.players.length > 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select version" />
+                </SelectTrigger>
+                <SelectContent>
+                  {gameState.versions.map(v => (
+                    <SelectItem key={v} value={v}>
+                      {v.charAt(0).toUpperCase() + v.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {gameState.players.length > 0 && (
+                <div className="text-xs text-gray-500 mt-1">
+                  Reset game to change version
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2">
                 <Users className="h-5 w-5" />
                 Add Player
               </CardTitle>
@@ -380,7 +418,7 @@ function App() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-600 mb-3">£{player.cash}</div>
-                
+
                 <div className="space-y-2">
                   <div className="text-sm font-medium text-gray-600">Properties ({player.properties.length})</div>
                   <div className="max-h-48 overflow-y-auto space-y-1">
@@ -394,7 +432,10 @@ function App() {
                             {getPropertyIcon(prop.type)}
                             <span className="font-medium truncate">{prop.name}</span>
                           </div>
-                          {getBuildingDisplay(prop)}
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs opacity-75">£{prop.purchase_cost}</span>
+                            {getBuildingDisplay(prop)}
+                          </div>
                         </div>
                         {prop.is_mortgaged && (
                           <Badge variant="secondary" className="mt-1 text-xs">Mortgaged</Badge>
@@ -532,7 +573,7 @@ function App() {
                 <TabsTrigger value="buy">Buy Property</TabsTrigger>
                 <TabsTrigger value="rent">Pay Rent</TabsTrigger>
               </TabsList>
-              
+
               <TabsContent value="buy" className="mt-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
                   {gameState.available_properties.map(prop => (
@@ -601,7 +642,7 @@ function App() {
                   ))}
                 </div>
               </TabsContent>
-              
+
               <TabsContent value="rent" className="mt-4">
                 <div className="space-y-4">
                   <div className="flex flex-wrap gap-4 items-end">
@@ -630,11 +671,11 @@ function App() {
                       />
                     </div>
                   </div>
-                  
+
                   <div className="text-sm text-gray-600">
                     Select an owned property to pay rent:
                   </div>
-                  
+
                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
                     {gameState.players.flatMap(player =>
                       player.properties.map(prop => (

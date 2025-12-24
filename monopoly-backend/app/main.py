@@ -280,6 +280,39 @@ PROPERTIES_DATA = {
 
 STATION_RENT = {1: 25, 2: 50, 3: 100, 4: 200}
 
+GAME_VERSIONS = ["london", "edinburgh"]
+
+EDINBURGH_NAMES = {
+    "old_kent_road": "Arthurs Seat",
+    "whitechapel_road": "Calton Hill",
+    "angel_islington": "Museum Of Childhood",
+    "euston_road": "Museum of Edinburgh",
+    "pentonville_road": "Edinburgh Zoo",
+    "pall_mall": "Heart of Midlothian FC",
+    "whitehall": "Hibernian FC",
+    "northumberland_avenue": "Murrayfield",
+    "bow_street": "Edinburgh St James",
+    "marlborough_street": "Omni",
+    "vine_street": "Multrees Walk",
+    "strand": "Princes Street",
+    "fleet_street": "Edinburgh News",
+    "trafalgar_square": "Royal Mile",
+    "leicester_square": "The Caledonian",
+    "coventry_street": "Scottish Parliament",
+    "piccadilly": "The Fringe",
+    "regent_street": "George Watson College",
+    "oxford_street": "Merchiston Castle School",
+    "bond_street": "University of Edinburgh",
+    "park_lane": "Scott Monument",
+    "mayfair": "Edinburgh Castle",
+    "kings_cross_station": "Edinburgh Airport",
+    "marylebone_station": "Haymarket Station",
+    "fenchurch_street_station": "Forth Bridge",
+    "liverpool_street_station": "Waverley Station",
+    "electric_company": "Scotmid Coop",
+    "water_works": "Water of Leith",
+}
+
 COLOR_GROUPS = {
     PropertyColor.BROWN: ["old_kent_road", "whitechapel_road"],
     PropertyColor.LIGHT_BLUE: ["angel_islington", "euston_road", "pentonville_road"],
@@ -310,8 +343,14 @@ class GameState:
         self.property_owners: dict[str, int] = {}
         self.free_parking_pot: int = 0
         self.next_player_id: int = 1
+        self.version: str = "london"
 
 game_state = GameState()
+
+def get_display_name(property_id: str) -> str:
+    if game_state.version == "edinburgh" and property_id in EDINBURGH_NAMES:
+        return EDINBURGH_NAMES[property_id]
+    return PROPERTIES_DATA[property_id]["name"]
 
 class CreatePlayerRequest(BaseModel):
     name: str
@@ -352,9 +391,25 @@ class TransferPropertyRequest(BaseModel):
     property_id: str
     sale_price: Optional[int] = None
 
+class SetVersionRequest(BaseModel):
+    version: str
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+@app.get("/game/versions")
+async def get_game_versions():
+    return {"versions": GAME_VERSIONS, "current_version": game_state.version}
+
+@app.post("/game/version")
+async def set_game_version(request: SetVersionRequest):
+    if request.version not in GAME_VERSIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid version. Must be one of: {GAME_VERSIONS}")
+    if len(game_state.players) > 0 or len(game_state.property_owners) > 0:
+        raise HTTPException(status_code=400, detail="Cannot change version mid-game. Reset the game first.")
+    game_state.version = request.version
+    return {"message": f"Game version set to {request.version}", "version": request.version}
 
 @app.get("/game/state")
 async def get_game_state():
@@ -366,6 +421,7 @@ async def get_game_state():
                 owned_prop = game_state.owned_properties.get(prop_id)
                 prop_data = PROPERTIES_DATA[prop_id].copy()
                 prop_data["property_id"] = prop_id
+                prop_data["name"] = get_display_name(prop_id)
                 if owned_prop:
                     prop_data["houses"] = owned_prop.houses
                     prop_data["has_hotel"] = owned_prop.has_hotel
@@ -378,24 +434,31 @@ async def get_game_state():
             "properties": player_properties
         })
     
+    available_props = []
+    for prop_id in PROPERTIES_DATA:
+        if prop_id not in game_state.property_owners:
+            prop_data = PROPERTIES_DATA[prop_id].copy()
+            prop_data["property_id"] = prop_id
+            prop_data["name"] = get_display_name(prop_id)
+            available_props.append(prop_data)
+    
     return {
         "players": players_list,
         "free_parking_pot": game_state.free_parking_pot,
-        "available_properties": [
-            {**PROPERTIES_DATA[prop_id], "property_id": prop_id}
-            for prop_id in PROPERTIES_DATA
-            if prop_id not in game_state.property_owners
-        ]
+        "available_properties": available_props,
+        "version": game_state.version,
+        "versions": GAME_VERSIONS
     }
 
 @app.get("/properties")
 async def get_all_properties():
-    return {
-        "properties": [
-            {**data, "property_id": prop_id}
-            for prop_id, data in PROPERTIES_DATA.items()
-        ]
-    }
+    props = []
+    for prop_id, data in PROPERTIES_DATA.items():
+        prop_data = data.copy()
+        prop_data["property_id"] = prop_id
+        prop_data["name"] = get_display_name(prop_id)
+        props.append(prop_data)
+    return {"properties": props}
 
 @app.post("/players")
 async def create_player(request: CreatePlayerRequest):
@@ -464,7 +527,7 @@ async def buy_property(request: BuyPropertyRequest):
     game_state.property_owners[request.property_id] = request.player_id
     game_state.owned_properties[request.property_id] = OwnedProperty(property_id=request.property_id)
     
-    return {"message": f"Property {prop_data['name']} purchased", "player_cash": player.cash}
+    return {"message": f"Property {get_display_name(request.property_id)} purchased", "player_cash": player.cash}
 
 @app.post("/properties/mortgage")
 async def mortgage_property(request: MortgageRequest):
@@ -487,7 +550,7 @@ async def mortgage_property(request: MortgageRequest):
     owned_prop.is_mortgaged = True
     player.cash += prop_data["mortgage_value"]
     
-    return {"message": f"Property {prop_data['name']} mortgaged", "player_cash": player.cash}
+    return {"message": f"Property {get_display_name(request.property_id)} mortgaged", "player_cash": player.cash}
 
 @app.post("/properties/unmortgage")
 async def unmortgage_property(request: MortgageRequest):
@@ -512,7 +575,7 @@ async def unmortgage_property(request: MortgageRequest):
     owned_prop.is_mortgaged = False
     player.cash -= unmortgage_cost
     
-    return {"message": f"Property {prop_data['name']} unmortgaged", "player_cash": player.cash, "cost": unmortgage_cost}
+    return {"message": f"Property {get_display_name(request.property_id)} unmortgaged", "player_cash": player.cash, "cost": unmortgage_cost}
 
 @app.post("/properties/build")
 async def build_house(request: BuildHouseRequest):
@@ -550,10 +613,10 @@ async def build_house(request: BuildHouseRequest):
     if owned_prop.houses == 4:
         owned_prop.houses = 0
         owned_prop.has_hotel = True
-        return {"message": f"Hotel built on {prop_data['name']}", "player_cash": player.cash}
+        return {"message": f"Hotel built on {get_display_name(request.property_id)}", "player_cash": player.cash}
     else:
         owned_prop.houses += 1
-        return {"message": f"House built on {prop_data['name']} (now {owned_prop.houses} houses)", "player_cash": player.cash}
+        return {"message": f"House built on {get_display_name(request.property_id)} (now {owned_prop.houses} houses)", "player_cash": player.cash}
 
 @app.post("/properties/sell-building")
 async def sell_building(request: BuildHouseRequest):
@@ -577,11 +640,11 @@ async def sell_building(request: BuildHouseRequest):
         owned_prop.has_hotel = False
         owned_prop.houses = 4
         player.cash += sell_value
-        return {"message": f"Hotel sold on {prop_data['name']} (now 4 houses)", "player_cash": player.cash}
+        return {"message": f"Hotel sold on {get_display_name(request.property_id)} (now 4 houses)", "player_cash": player.cash}
     else:
         owned_prop.houses -= 1
         player.cash += sell_value
-        return {"message": f"House sold on {prop_data['name']} (now {owned_prop.houses} houses)", "player_cash": player.cash}
+        return {"message": f"House sold on {get_display_name(request.property_id)} (now {owned_prop.houses} houses)", "player_cash": player.cash}
 
 @app.post("/properties/sell")
 async def sell_property(request: SellPropertyRequest):
@@ -608,7 +671,7 @@ async def sell_property(request: SellPropertyRequest):
     del game_state.owned_properties[request.property_id]
     
     return {
-        "message": f"Property {prop_data['name']} sold back to bank for £{sale_value}",
+        "message": f"Property {get_display_name(request.property_id)} sold back to bank for £{sale_value}",
         "sale_value": sale_value,
         "player_cash": player.cash
     }
@@ -640,7 +703,7 @@ async def transfer_property(request: TransferPropertyRequest):
     
     game_state.property_owners[request.property_id] = request.to_player_id
     
-    message = f"Property {prop_data['name']} transferred from {from_player.name} to {to_player.name}"
+    message = f"Property {get_display_name(request.property_id)} transferred from {from_player.name} to {to_player.name}"
     if request.sale_price is not None and request.sale_price > 0:
         message += f" for £{request.sale_price}"
     
@@ -709,7 +772,7 @@ async def calculate_rent_endpoint(request: PayRentRequest):
     
     return {
         "rent": rent,
-        "property_name": prop_data["name"],
+        "property_name": get_display_name(request.property_id),
         "owner_id": game_state.property_owners[request.property_id]
     }
 
@@ -741,9 +804,8 @@ async def pay_rent(request: PayRentRequest):
     payer.cash -= rent
     game_state.players[owner_id].cash += rent
     
-    prop_data = PROPERTIES_DATA[request.property_id]
     return {
-        "message": f"Rent of £{rent} paid for {prop_data['name']}",
+        "message": f"Rent of £{rent} paid for {get_display_name(request.property_id)}",
         "rent": rent,
         "payer_cash": payer.cash,
         "owner_cash": game_state.players[owner_id].cash
