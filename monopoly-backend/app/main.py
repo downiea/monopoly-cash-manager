@@ -6,6 +6,9 @@ from pydantic import BaseModel
 from typing import Optional
 from enum import Enum
 import os
+import json
+
+SAVE_FILE = os.path.join(os.path.dirname(__file__), "..", "game_state.json")
 
 app = FastAPI()
 
@@ -345,7 +348,35 @@ class GameState:
         self.next_player_id: int = 1
         self.version: str = "london"
 
+def save_game_state():
+    data = {
+        "players": {str(k): v.model_dump() for k, v in game_state.players.items()},
+        "owned_properties": {k: v.model_dump() for k, v in game_state.owned_properties.items()},
+        "property_owners": game_state.property_owners,
+        "free_parking_pot": game_state.free_parking_pot,
+        "next_player_id": game_state.next_player_id,
+        "version": game_state.version,
+    }
+    with open(SAVE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_game_state():
+    if not os.path.exists(SAVE_FILE):
+        return
+    try:
+        with open(SAVE_FILE, "r") as f:
+            data = json.load(f)
+        game_state.players = {int(k): Player(**v) for k, v in data.get("players", {}).items()}
+        game_state.owned_properties = {k: OwnedProperty(**v) for k, v in data.get("owned_properties", {}).items()}
+        game_state.property_owners = data.get("property_owners", {})
+        game_state.free_parking_pot = data.get("free_parking_pot", 0)
+        game_state.next_player_id = data.get("next_player_id", 1)
+        game_state.version = data.get("version", "london")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
 game_state = GameState()
+load_game_state()
 
 def get_display_name(property_id: str) -> str:
     if game_state.version == "edinburgh" and property_id in EDINBURGH_NAMES:
@@ -409,6 +440,7 @@ async def set_game_version(request: SetVersionRequest):
     if len(game_state.players) > 0 or len(game_state.property_owners) > 0:
         raise HTTPException(status_code=400, detail="Cannot change version mid-game. Reset the game first.")
     game_state.version = request.version
+    save_game_state()
     return {"message": f"Game version set to {request.version}", "version": request.version}
 
 @app.get("/game/state")
@@ -471,6 +503,7 @@ async def create_player(request: CreatePlayerRequest):
     )
     game_state.players[player.id] = player
     game_state.next_player_id += 1
+    save_game_state()
     
     return {"player": {"id": player.id, "name": player.name, "cash": player.cash}}
 
@@ -486,6 +519,7 @@ async def remove_player(player_id: int):
             del game_state.owned_properties[prop_id]
     
     del game_state.players[player_id]
+    save_game_state()
     return {"message": "Player removed"}
 
 @app.post("/transfer")
@@ -506,6 +540,7 @@ async def transfer_money(request: TransferMoneyRequest):
     elif request.is_fine:
         game_state.free_parking_pot += request.amount
     
+    save_game_state()
     return {"message": "Transfer complete", "free_parking_pot": game_state.free_parking_pot}
 
 @app.post("/properties/buy")
@@ -526,6 +561,7 @@ async def buy_property(request: BuyPropertyRequest):
     player.cash -= prop_data["purchase_cost"]
     game_state.property_owners[request.property_id] = request.player_id
     game_state.owned_properties[request.property_id] = OwnedProperty(property_id=request.property_id)
+    save_game_state()
     
     return {"message": f"Property {get_display_name(request.property_id)} purchased", "player_cash": player.cash}
 
@@ -549,6 +585,7 @@ async def mortgage_property(request: MortgageRequest):
     
     owned_prop.is_mortgaged = True
     player.cash += prop_data["mortgage_value"]
+    save_game_state()
     
     return {"message": f"Property {get_display_name(request.property_id)} mortgaged", "player_cash": player.cash}
 
@@ -574,6 +611,7 @@ async def unmortgage_property(request: MortgageRequest):
     
     owned_prop.is_mortgaged = False
     player.cash -= unmortgage_cost
+    save_game_state()
     
     return {"message": f"Property {get_display_name(request.property_id)} unmortgaged", "player_cash": player.cash, "cost": unmortgage_cost}
 
@@ -613,9 +651,11 @@ async def build_house(request: BuildHouseRequest):
     if owned_prop.houses == 4:
         owned_prop.houses = 0
         owned_prop.has_hotel = True
+        save_game_state()
         return {"message": f"Hotel built on {get_display_name(request.property_id)}", "player_cash": player.cash}
     else:
         owned_prop.houses += 1
+        save_game_state()
         return {"message": f"House built on {get_display_name(request.property_id)} (now {owned_prop.houses} houses)", "player_cash": player.cash}
 
 @app.post("/properties/sell-building")
@@ -640,10 +680,12 @@ async def sell_building(request: BuildHouseRequest):
         owned_prop.has_hotel = False
         owned_prop.houses = 4
         player.cash += sell_value
+        save_game_state()
         return {"message": f"Hotel sold on {get_display_name(request.property_id)} (now 4 houses)", "player_cash": player.cash}
     else:
         owned_prop.houses -= 1
         player.cash += sell_value
+        save_game_state()
         return {"message": f"House sold on {get_display_name(request.property_id)} (now {owned_prop.houses} houses)", "player_cash": player.cash}
 
 @app.post("/properties/sell")
@@ -669,6 +711,7 @@ async def sell_property(request: SellPropertyRequest):
     player.cash += sale_value
     del game_state.property_owners[request.property_id]
     del game_state.owned_properties[request.property_id]
+    save_game_state()
     
     return {
         "message": f"Property {get_display_name(request.property_id)} sold back to bank for £{sale_value}",
@@ -702,6 +745,7 @@ async def transfer_property(request: TransferPropertyRequest):
         from_player.cash += request.sale_price
     
     game_state.property_owners[request.property_id] = request.to_player_id
+    save_game_state()
     
     message = f"Property {get_display_name(request.property_id)} transferred from {from_player.name} to {to_player.name}"
     if request.sale_price is not None and request.sale_price > 0:
@@ -803,6 +847,7 @@ async def pay_rent(request: PayRentRequest):
     
     payer.cash -= rent
     game_state.players[owner_id].cash += rent
+    save_game_state()
     
     return {
         "message": f"Rent of £{rent} paid for {get_display_name(request.property_id)}",
@@ -819,6 +864,7 @@ async def collect_free_parking(request: CollectFreeParkingRequest):
     amount = game_state.free_parking_pot
     game_state.players[request.player_id].cash += amount
     game_state.free_parking_pot = 0
+    save_game_state()
     
     return {
         "message": f"Collected £{amount} from Free Parking",
@@ -833,6 +879,8 @@ async def reset_game():
     game_state.property_owners.clear()
     game_state.free_parking_pot = 0
     game_state.next_player_id = 1
+    game_state.version = "london"
+    save_game_state()
     return {"message": "Game reset"}
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
