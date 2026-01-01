@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft } from 'lucide-react'
+import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft, Plus, CircleDollarSign } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -65,6 +65,53 @@ const COLOR_TEXT: Record<string, string> = {
   utility: 'text-white',
 }
 
+const BOARD_ORDER = [
+  'old_kent_road',
+  'whitechapel_road',
+  'kings_cross_station',
+  'angel_islington',
+  'euston_road',
+  'pentonville_road',
+  'pall_mall',
+  'electric_company',
+  'whitehall',
+  'northumberland_avenue',
+  'marylebone_station',
+  'bow_street',
+  'marlborough_street',
+  'vine_street',
+  'strand',
+  'fleet_street',
+  'trafalgar_square',
+  'fenchurch_street_station',
+  'leicester_square',
+  'coventry_street',
+  'water_works',
+  'piccadilly',
+  'regent_street',
+  'oxford_street',
+  'bond_street',
+  'liverpool_street_station',
+  'park_lane',
+  'mayfair',
+]
+
+const ORDER_INDEX: Record<string, number> = BOARD_ORDER.reduce((acc, id, idx) => {
+  acc[id] = idx
+  return acc
+}, {} as Record<string, number>)
+
+const COLOR_GROUPS: Record<string, string[]> = {
+  brown: ['old_kent_road', 'whitechapel_road'],
+  light_blue: ['angel_islington', 'euston_road', 'pentonville_road'],
+  pink: ['pall_mall', 'whitehall', 'northumberland_avenue'],
+  orange: ['bow_street', 'marlborough_street', 'vine_street'],
+  red: ['strand', 'fleet_street', 'trafalgar_square'],
+  yellow: ['leicester_square', 'coventry_street', 'piccadilly'],
+  green: ['regent_street', 'oxford_street', 'bond_street'],
+  dark_blue: ['park_lane', 'mayfair'],
+}
+
 function App() {
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [newPlayerName, setNewPlayerName] = useState('')
@@ -77,6 +124,14 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [transferPropertyTo, setTransferPropertyTo] = useState<string>('')
   const [transferPropertyPrice, setTransferPropertyPrice] = useState('')
+  
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false)
+  const [addPlayerDialogOpen, setAddPlayerDialogOpen] = useState(false)
+  const [freeParkingDialogOpen, setFreeParkingDialogOpen] = useState(false)
+  const [payRentDialogOpen, setPayRentDialogOpen] = useState(false)
+  const [rentPropertyId, setRentPropertyId] = useState<string>('')
+  const [rentOwnerId, setRentOwnerId] = useState<number | null>(null)
+  const [rentDiceRoll, setRentDiceRoll] = useState('')
 
   const fetchGameState = useCallback(async () => {
     try {
@@ -120,6 +175,7 @@ function App() {
     if (!newPlayerName.trim()) return
     await handleApiCall('/players', 'POST', { name: newPlayerName })
     setNewPlayerName('')
+    setAddPlayerDialogOpen(false)
   }
 
   const removePlayer = async (playerId: number) => {
@@ -172,6 +228,23 @@ function App() {
     setTransferAmount('')
     setTransferFrom('')
     setTransferTo('')
+    setTransferDialogOpen(false)
+  }
+
+  const passGo = async (playerId: number) => {
+    await handleApiCall('/transfer', 'POST', {
+      from_player_id: null,
+      to_player_id: playerId,
+      amount: 200,
+      is_fine: false,
+    })
+  }
+
+  const openPayDialog = (playerId: number) => {
+    setTransferFrom(playerId.toString())
+    setTransferTo('')
+    setTransferAmount('')
+    setTransferDialogOpen(true)
   }
 
   const payRent = async (fromPlayerId: number, propertyId: string, dice?: number) => {
@@ -182,8 +255,33 @@ function App() {
     })
   }
 
+  const handlePayRent = async () => {
+    if (!selectedPlayer || !rentPropertyId) return
+    const prop = gameState?.players.flatMap(p => p.properties).find(p => p.property_id === rentPropertyId)
+    const dice = prop?.type === 'utility' ? parseInt(rentDiceRoll) : undefined
+    if (prop?.type === 'utility' && !dice) {
+      setError('Dice roll required for utility rent')
+      return
+    }
+    await payRent(selectedPlayer, rentPropertyId, dice)
+    setPayRentDialogOpen(false)
+    setRentPropertyId('')
+    setRentOwnerId(null)
+    setRentDiceRoll('')
+    setSelectedPlayer(null)
+  }
+
+  const openPayRentDialog = (propertyId: string, ownerId: number) => {
+    setRentPropertyId(propertyId)
+    setRentOwnerId(ownerId)
+    setRentDiceRoll('')
+    setSelectedPlayer(null)
+    setPayRentDialogOpen(true)
+  }
+
   const collectFreeParking = async (playerId: number) => {
     await handleApiCall('/free-parking/collect', 'POST', { player_id: playerId })
+    setFreeParkingDialogOpen(false)
   }
 
   const resetGame = async () => {
@@ -216,6 +314,25 @@ function App() {
     return null
   }
 
+  const sortPropertiesByBoardOrder = (properties: Property[]) => {
+    return [...properties].sort((a, b) => {
+      const orderA = ORDER_INDEX[a.property_id] ?? 999
+      const orderB = ORDER_INDEX[b.property_id] ?? 999
+      return orderA - orderB
+    })
+  }
+
+  const getOwnedColorGroups = (properties: Property[]) => {
+    const ownedColors: string[] = []
+    for (const [color, propertyIds] of Object.entries(COLOR_GROUPS)) {
+      const ownedInColor = properties.filter(p => propertyIds.includes(p.property_id))
+      if (ownedInColor.length === propertyIds.length) {
+        ownedColors.push(color)
+      }
+    }
+    return ownedColors
+  }
+
   if (!gameState) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -227,14 +344,67 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-800 to-green-900 p-4">
       <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-2">
           <h1 className="text-3xl font-bold text-white flex items-center gap-2">
             <Banknote className="h-8 w-8" />
             Monopoly Cash Manager
           </h1>
-          <div className="flex items-center gap-4">
-            <Button onClick={fetchGameState} variant="outline" size="sm" disabled={loading}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select
+              value={gameState.version}
+              onValueChange={setGameVersion}
+              disabled={gameState.players.length > 0}
+            >
+              <SelectTrigger className="w-32 bg-white">
+                <SelectValue placeholder="Version" />
+              </SelectTrigger>
+              <SelectContent>
+                {gameState.versions.map(v => (
+                  <SelectItem key={v} value={v}>
+                    {v.charAt(0).toUpperCase() + v.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex items-center gap-1 bg-yellow-100 px-3 py-1.5 rounded-md">
+              <ParkingCircle className="h-4 w-4 text-yellow-800" />
+              <span className="font-bold text-yellow-800">£{gameState.free_parking_pot}</span>
+              {gameState.players.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-yellow-800 hover:bg-yellow-200"
+                  onClick={() => setFreeParkingDialogOpen(true)}
+                >
+                  Collect
+                </Button>
+              )}
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              onClick={() => setTransferDialogOpen(true)}
+            >
+              <ArrowRightLeft className="h-4 w-4 mr-1" />
+              Transfer
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              onClick={() => setAddPlayerDialogOpen(true)}
+              disabled={gameState.players.length >= 8}
+            >
+              <Plus className="h-4 w-4 mr-1" />
+              Add Player
+            </Button>
+
+            <Button onClick={fetchGameState} variant="outline" size="sm" disabled={loading} className="bg-white">
+              <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
             <Button onClick={resetGame} variant="destructive" size="sm">
@@ -249,318 +419,367 @@ function App() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
-          <Card className="bg-yellow-100 border-yellow-400">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-yellow-800">
-                <ParkingCircle className="h-5 w-5" />
-                Free Parking
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-yellow-800">£{gameState.free_parking_pot}</div>
-              {gameState.players.length > 0 && (
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="mt-2">
-                      Collect
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Collect Free Parking</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-2">
-                      {gameState.players.map(player => (
-                        <Button
-                          key={player.id}
-                          onClick={() => collectFreeParking(player.id)}
-                          className="w-full"
-                          variant="outline"
-                        >
-                          {player.name} collects £{gameState.free_parking_pot}
-                        </Button>
-                      ))}
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="lg:col-span-2">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2">
+        <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
                 <Banknote className="h-5 w-5" />
                 Money Transfer
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2 items-end">
-                <div className="flex-1 min-w-24">
-                  <label className="text-xs text-gray-500">From</label>
-                  <Select value={transferFrom} onValueChange={setTransferFrom}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="From" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bank">Bank</SelectItem>
-                      {gameState.players.map(p => (
-                        <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex-1 min-w-24">
-                  <label className="text-xs text-gray-500">To</label>
-                  <Select value={transferTo} onValueChange={setTransferTo}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="To" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bank">Bank</SelectItem>
-                      <SelectItem value="fine">Fine (Free Parking)</SelectItem>
-                      {gameState.players.map(p => (
-                        <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-24">
-                  <label className="text-xs text-gray-500">Amount</label>
-                  <Input
-                    type="number"
-                    placeholder="£"
-                    value={transferAmount}
-                    onChange={e => setTransferAmount(e.target.value)}
-                  />
-                </div>
-                <Button onClick={transferMoney} disabled={!transferFrom || !transferTo || !transferAmount}>
-                  Transfer
-                </Button>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-gray-600">From</label>
+                <Select value={transferFrom} onValueChange={setTransferFrom}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bank">Bank</SelectItem>
+                    {gameState.players.map(p => (
+                      <SelectItem key={p.id} value={p.id.toString()}>{p.name} (£{p.cash})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            </CardContent>
-          </Card>
+              <div>
+                <label className="text-sm text-gray-600">To</label>
+                <Select value={transferTo} onValueChange={setTransferTo}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select destination" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bank">Bank</SelectItem>
+                    <SelectItem value="fine">Fine (Free Parking)</SelectItem>
+                    {gameState.players.map(p => (
+                      <SelectItem key={p.id} value={p.id.toString()}>{p.name} (£{p.cash})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm text-gray-600">Amount</label>
+                <Input
+                  type="number"
+                  placeholder="£"
+                  value={transferAmount}
+                  onChange={e => setTransferAmount(e.target.value)}
+                />
+              </div>
+              <Button onClick={transferMoney} disabled={!transferFrom || !transferTo || !transferAmount} className="w-full">
+                Transfer
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2">
-                <Building2 className="h-5 w-5" />
-                Game Version
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Select
-                value={gameState.version}
-                onValueChange={setGameVersion}
-                disabled={gameState.players.length > 0}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select version" />
-                </SelectTrigger>
-                <SelectContent>
-                  {gameState.versions.map(v => (
-                    <SelectItem key={v} value={v}>
-                      {v.charAt(0).toUpperCase() + v.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {gameState.players.length > 0 && (
-                <div className="text-xs text-gray-500 mt-1">
-                  Reset game to change version
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2">
+        <Dialog open={addPlayerDialogOpen} onOpenChange={setAddPlayerDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
                 <Users className="h-5 w-5" />
                 Add Player
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-2">
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-gray-600">Player Name</label>
                 <Input
-                  placeholder="Player name"
+                  placeholder="Enter player name"
                   value={newPlayerName}
                   onChange={e => setNewPlayerName(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && addPlayer()}
                 />
-                <Button onClick={addPlayer} disabled={gameState.players.length >= 8}>
-                  Add
-                </Button>
               </div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-sm text-gray-500">
                 {gameState.players.length}/8 players
               </div>
-            </CardContent>
-          </Card>
-        </div>
+              <Button onClick={addPlayer} disabled={!newPlayerName.trim()} className="w-full">
+                Add Player
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-          {gameState.players.map(player => (
-            <Card key={player.id} className="bg-white">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{player.name}</CardTitle>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-red-500 hover:text-red-700"
-                    onClick={() => removePlayer(player.id)}
-                  >
-                    Remove
-                  </Button>
+        <Dialog open={freeParkingDialogOpen} onOpenChange={setFreeParkingDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <ParkingCircle className="h-5 w-5" />
+                Collect Free Parking (£{gameState.free_parking_pot})
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2">
+              {gameState.players.map(player => (
+                <Button
+                  key={player.id}
+                  onClick={() => collectFreeParking(player.id)}
+                  className="w-full"
+                  variant="outline"
+                >
+                  {player.name} collects £{gameState.free_parking_pot}
+                </Button>
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={payRentDialogOpen} onOpenChange={setPayRentDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <CircleDollarSign className="h-5 w-5" />
+                Pay Rent
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-gray-600">Who is paying rent?</label>
+                <Select value={selectedPlayer?.toString() || ''} onValueChange={v => setSelectedPlayer(parseInt(v))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select player" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {gameState.players
+                      .filter(p => p.id !== rentOwnerId)
+                      .map(p => (
+                        <SelectItem key={p.id} value={p.id.toString()}>{p.name} (£{p.cash})</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {gameState.players.flatMap(p => p.properties).find(p => p.property_id === rentPropertyId)?.type === 'utility' && (
+                <div>
+                  <label className="text-sm text-gray-600">Dice Roll (required for utilities)</label>
+                  <Input
+                    type="number"
+                    placeholder="2-12"
+                    min={2}
+                    max={12}
+                    value={rentDiceRoll}
+                    onChange={e => setRentDiceRoll(e.target.value)}
+                  />
                 </div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-600 mb-3">£{player.cash}</div>
+              )}
+              <Button onClick={handlePayRent} disabled={!selectedPlayer} className="w-full">
+                Pay Rent
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
-                <div className="space-y-2">
-                  <div className="text-sm font-medium text-gray-600">Properties ({player.properties.length})</div>
-                  <div className="max-h-48 overflow-y-auto space-y-1">
-                    {player.properties.map(prop => (
-                      <div
-                        key={prop.property_id}
-                        className={`p-2 rounded text-sm ${COLOR_MAP[prop.color]} ${COLOR_TEXT[prop.color]} ${prop.is_mortgaged ? 'opacity-50' : ''}`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1">
-                            {getPropertyIcon(prop.type)}
-                            <span className="font-medium truncate">{prop.name}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs opacity-75">£{prop.purchase_cost}</span>
-                            {getBuildingDisplay(prop)}
-                          </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+          {gameState.players.map(player => {
+            const sortedProperties = sortPropertiesByBoardOrder(player.properties)
+            const ownedColorGroups = getOwnedColorGroups(player.properties)
+            
+            return (
+              <Card key={player.id} className="bg-white">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-xl">{player.name}</CardTitle>
+                      {ownedColorGroups.length > 0 && (
+                        <div className="flex gap-1">
+                          {ownedColorGroups.map(color => (
+                            <div
+                              key={color}
+                              className={`w-4 h-4 rounded-full ${COLOR_MAP[color]} border-2 border-white shadow`}
+                              title={`Owns all ${color} properties`}
+                            />
+                          ))}
                         </div>
-                        {prop.is_mortgaged && (
-                          <Badge variant="secondary" className="mt-1 text-xs">Mortgaged</Badge>
-                        )}
-                        <div className="flex gap-1 mt-1 flex-wrap">
-                          {prop.type === 'property' && !prop.is_mortgaged && (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                className="h-6 text-xs px-2"
-                                onClick={() => buildHouse(player.id, prop.property_id)}
-                              >
-                                +Build
-                              </Button>
-                              {(prop.houses || 0) > 0 || prop.has_hotel ? (
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-500 hover:text-red-700"
+                      onClick={() => removePlayer(player.id)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-3xl font-bold text-green-600">£{player.cash}</div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="bg-green-100 hover:bg-green-200 text-green-800"
+                        onClick={() => passGo(player.id)}
+                      >
+                        GO +£200
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="bg-blue-100 hover:bg-blue-200 text-blue-800"
+                        onClick={() => openPayDialog(player.id)}
+                      >
+                        PAY
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-gray-600">Properties ({player.properties.length})</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {sortedProperties.map(prop => {
+                        const ownsColorGroup = prop.type === 'property' && ownedColorGroups.includes(prop.color)
+                        return (
+                          <div
+                            key={prop.property_id}
+                            className={`p-2 rounded text-sm ${COLOR_MAP[prop.color]} ${COLOR_TEXT[prop.color]} ${prop.is_mortgaged ? 'opacity-50' : ''} ${ownsColorGroup ? 'ring-2 ring-yellow-400' : ''}`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1">
+                                {getPropertyIcon(prop.type)}
+                                <span className="font-medium truncate">{prop.name}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs opacity-75">£{prop.purchase_cost}</span>
+                                {getBuildingDisplay(prop)}
+                              </div>
+                            </div>
+                            {prop.is_mortgaged && (
+                              <Badge variant="secondary" className="mt-1 text-xs">Mortgaged</Badge>
+                            )}
+                            <div className="flex gap-1 mt-1 flex-wrap">
+                              {!prop.is_mortgaged && (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="h-6 text-xs px-2 bg-yellow-200 hover:bg-yellow-300 text-yellow-800"
+                                  onClick={() => openPayRentDialog(prop.property_id, player.id)}
+                                >
+                                  Rent
+                                </Button>
+                              )}
+                              {prop.type === 'property' && !prop.is_mortgaged && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    className="h-6 text-xs px-2"
+                                    onClick={() => buildHouse(player.id, prop.property_id)}
+                                  >
+                                    +Build
+                                  </Button>
+                                  {(prop.houses || 0) > 0 || prop.has_hotel ? (
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      className="h-6 text-xs px-2"
+                                      onClick={() => sellBuilding(player.id, prop.property_id)}
+                                    >
+                                      -Sell
+                                    </Button>
+                                  ) : null}
+                                </>
+                              )}
+                              {prop.is_mortgaged ? (
                                 <Button
                                   size="sm"
                                   variant="secondary"
                                   className="h-6 text-xs px-2"
-                                  onClick={() => sellBuilding(player.id, prop.property_id)}
+                                  onClick={() => unmortgageProperty(player.id, prop.property_id)}
                                 >
-                                  -Sell
+                                  Unmortgage
                                 </Button>
-                              ) : null}
-                            </>
-                          )}
-                          {prop.is_mortgaged ? (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="h-6 text-xs px-2"
-                              onClick={() => unmortgageProperty(player.id, prop.property_id)}
-                            >
-                              Unmortgage
-                            </Button>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="h-6 text-xs px-2"
-                              onClick={() => mortgageProperty(player.id, prop.property_id)}
-                            >
-                              Mortgage
-                            </Button>
-                          )}
-                          {(prop.houses || 0) === 0 && !prop.has_hotel && (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                className="h-6 text-xs px-2 bg-red-200 hover:bg-red-300"
-                                onClick={() => sellProperty(player.id, prop.property_id)}
-                              >
-                                Sell
-                              </Button>
-                              <Dialog>
-                                <DialogTrigger asChild>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="h-6 text-xs px-2"
+                                  onClick={() => mortgageProperty(player.id, prop.property_id)}
+                                >
+                                  Mortgage
+                                </Button>
+                              )}
+                              {(prop.houses || 0) === 0 && !prop.has_hotel && (
+                                <>
                                   <Button
                                     size="sm"
                                     variant="secondary"
-                                    className="h-6 text-xs px-2 bg-blue-200 hover:bg-blue-300"
-                                    onClick={() => {
-                                      setTransferPropertyTo('')
-                                      setTransferPropertyPrice('')
-                                    }}
+                                    className="h-6 text-xs px-2 bg-red-200 hover:bg-red-300"
+                                    onClick={() => sellProperty(player.id, prop.property_id)}
                                   >
-                                    <ArrowRightLeft className="h-3 w-3 mr-1" />
-                                    Transfer
+                                    Sell
                                   </Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                  <DialogHeader>
-                                    <DialogTitle>Transfer {prop.name}</DialogTitle>
-                                  </DialogHeader>
-                                  <div className="space-y-4">
-                                    <div>
-                                      <label className="text-sm text-gray-600">Transfer to:</label>
-                                      <Select value={transferPropertyTo} onValueChange={setTransferPropertyTo}>
-                                        <SelectTrigger>
-                                          <SelectValue placeholder="Select player" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {gameState.players
-                                            .filter(p => p.id !== player.id)
-                                            .map(p => (
-                                              <SelectItem key={p.id} value={p.id.toString()}>
-                                                {p.name} (£{p.cash})
-                                              </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                      </Select>
-                                    </div>
-                                    <div>
-                                      <label className="text-sm text-gray-600">Sale price (optional):</label>
-                                      <Input
-                                        type="number"
-                                        placeholder="£0 for free transfer"
-                                        value={transferPropertyPrice}
-                                        onChange={e => setTransferPropertyPrice(e.target.value)}
-                                      />
-                                    </div>
-                                    <Button
-                                      className="w-full"
-                                      disabled={!transferPropertyTo}
-                                      onClick={() => {
-                                        const price = transferPropertyPrice ? parseInt(transferPropertyPrice) : undefined
-                                        transferProperty(player.id, parseInt(transferPropertyTo), prop.property_id, price)
-                                      }}
-                                    >
-                                      Transfer Property
-                                    </Button>
-                                  </div>
-                                </DialogContent>
-                              </Dialog>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                                  <Dialog>
+                                    <DialogTrigger asChild>
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        className="h-6 text-xs px-2 bg-blue-200 hover:bg-blue-300"
+                                        onClick={() => {
+                                          setTransferPropertyTo('')
+                                          setTransferPropertyPrice('')
+                                        }}
+                                      >
+                                        <ArrowRightLeft className="h-3 w-3 mr-1" />
+                                        Transfer
+                                      </Button>
+                                    </DialogTrigger>
+                                    <DialogContent>
+                                      <DialogHeader>
+                                        <DialogTitle>Transfer {prop.name}</DialogTitle>
+                                      </DialogHeader>
+                                      <div className="space-y-4">
+                                        <div>
+                                          <label className="text-sm text-gray-600">Transfer to:</label>
+                                          <Select value={transferPropertyTo} onValueChange={setTransferPropertyTo}>
+                                            <SelectTrigger>
+                                              <SelectValue placeholder="Select player" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {gameState.players
+                                                .filter(p => p.id !== player.id)
+                                                .map(p => (
+                                                  <SelectItem key={p.id} value={p.id.toString()}>
+                                                    {p.name} (£{p.cash})
+                                                  </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm text-gray-600">Sale price (optional):</label>
+                                          <Input
+                                            type="number"
+                                            placeholder="£0 for free transfer"
+                                            value={transferPropertyPrice}
+                                            onChange={e => setTransferPropertyPrice(e.target.value)}
+                                          />
+                                        </div>
+                                        <Button
+                                          className="w-full"
+                                          disabled={!transferPropertyTo}
+                                          onClick={() => {
+                                            const price = transferPropertyPrice ? parseInt(transferPropertyPrice) : undefined
+                                            transferProperty(player.id, parseInt(transferPropertyTo), prop.property_id, price)
+                                          }}
+                                        >
+                                          Transfer Property
+                                        </Button>
+                                      </div>
+                                    </DialogContent>
+                                  </Dialog>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
 
         <Card>
