@@ -1,8 +1,12 @@
 import path from "path"
+import { fileURLToPath } from 'url'
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
 export default defineConfig({
+  root: __dirname,
   plugins: [react()],
   resolve: {
     alias: {
@@ -10,14 +14,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
     allowedHosts: true,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-    },
   },
 })
-
