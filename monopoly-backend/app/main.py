@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from enum import Enum
+from datetime import datetime
 import os
 import json
 
@@ -339,6 +340,15 @@ class OwnedProperty(BaseModel):
     has_hotel: bool = False
     is_mortgaged: bool = False
 
+class Transaction(BaseModel):
+    id: int
+    timestamp: str
+    type: str
+    from_entity: str
+    to_entity: str
+    amount: int
+    description: str
+
 class GameState:
     def __init__(self):
         self.players: dict[int, Player] = {}
@@ -347,6 +357,8 @@ class GameState:
         self.free_parking_pot: int = 0
         self.next_player_id: int = 1
         self.version: str = "london"
+        self.transactions: list[Transaction] = []
+        self.next_transaction_id: int = 1
 
 def save_game_state():
     data = {
@@ -356,6 +368,8 @@ def save_game_state():
         "free_parking_pot": game_state.free_parking_pot,
         "next_player_id": game_state.next_player_id,
         "version": game_state.version,
+        "transactions": [t.model_dump() for t in game_state.transactions],
+        "next_transaction_id": game_state.next_transaction_id,
     }
     with open(SAVE_FILE, "w") as f:
         json.dump(data, f, indent=2)
@@ -372,6 +386,8 @@ def load_game_state():
         game_state.free_parking_pot = data.get("free_parking_pot", 0)
         game_state.next_player_id = data.get("next_player_id", 1)
         game_state.version = data.get("version", "london")
+        game_state.transactions = [Transaction(**t) for t in data.get("transactions", [])]
+        game_state.next_transaction_id = data.get("next_transaction_id", 1)
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
 
@@ -382,6 +398,26 @@ def get_display_name(property_id: str) -> str:
     if game_state.version == "edinburgh" and property_id in EDINBURGH_NAMES:
         return EDINBURGH_NAMES[property_id]
     return PROPERTIES_DATA[property_id]["name"]
+
+def get_player_name(player_id: Optional[int]) -> str:
+    if player_id is None:
+        return "Bank"
+    if player_id in game_state.players:
+        return game_state.players[player_id].name
+    return f"Player {player_id}"
+
+def add_transaction(trans_type: str, from_entity: str, to_entity: str, amount: int, description: str):
+    transaction = Transaction(
+        id=game_state.next_transaction_id,
+        timestamp=datetime.now().isoformat(),
+        type=trans_type,
+        from_entity=from_entity,
+        to_entity=to_entity,
+        amount=amount,
+        description=description
+    )
+    game_state.transactions.append(transaction)
+    game_state.next_transaction_id += 1
 
 class CreatePlayerRequest(BaseModel):
     name: str
@@ -529,6 +565,8 @@ async def transfer_money(request: TransferMoneyRequest):
     if request.to_player_id is not None and request.to_player_id not in game_state.players:
         raise HTTPException(status_code=404, detail="To player not found")
     
+    from_name = get_player_name(request.from_player_id)
+    
     if request.from_player_id is not None:
         player = game_state.players[request.from_player_id]
         if player.cash < request.amount:
@@ -537,8 +575,13 @@ async def transfer_money(request: TransferMoneyRequest):
     
     if request.to_player_id is not None:
         game_state.players[request.to_player_id].cash += request.amount
+        to_name = get_player_name(request.to_player_id)
+        add_transaction("transfer", from_name, to_name, request.amount, f"{from_name} paid £{request.amount} to {to_name}")
     elif request.is_fine:
         game_state.free_parking_pot += request.amount
+        add_transaction("fine", from_name, "Free Parking", request.amount, f"{from_name} paid £{request.amount} fine to Free Parking")
+    else:
+        add_transaction("transfer", from_name, "Bank", request.amount, f"{from_name} paid £{request.amount} to Bank")
     
     save_game_state()
     return {"message": "Transfer complete", "free_parking_pot": game_state.free_parking_pot}
@@ -561,9 +604,14 @@ async def buy_property(request: BuyPropertyRequest):
     player.cash -= prop_data["purchase_cost"]
     game_state.property_owners[request.property_id] = request.player_id
     game_state.owned_properties[request.property_id] = OwnedProperty(property_id=request.property_id)
+    
+    prop_name = get_display_name(request.property_id)
+    player_name = get_player_name(request.player_id)
+    add_transaction("purchase", player_name, "Bank", prop_data["purchase_cost"], f"{player_name} bought {prop_name} for £{prop_data['purchase_cost']}")
+    
     save_game_state()
     
-    return {"message": f"Property {get_display_name(request.property_id)} purchased", "player_cash": player.cash}
+    return {"message": f"Property {prop_name} purchased", "player_cash": player.cash}
 
 @app.post("/properties/mortgage")
 async def mortgage_property(request: MortgageRequest):
@@ -847,10 +895,16 @@ async def pay_rent(request: PayRentRequest):
     
     payer.cash -= rent
     game_state.players[owner_id].cash += rent
+    
+    payer_name = get_player_name(request.from_player_id)
+    owner_name = get_player_name(owner_id)
+    prop_name = get_display_name(request.property_id)
+    add_transaction("rent", payer_name, owner_name, rent, f"{payer_name} paid £{rent} rent to {owner_name} for {prop_name}")
+    
     save_game_state()
     
     return {
-        "message": f"Rent of £{rent} paid for {get_display_name(request.property_id)}",
+        "message": f"Rent of £{rent} paid for {prop_name}",
         "rent": rent,
         "payer_cash": payer.cash,
         "owner_cash": game_state.players[owner_id].cash
@@ -862,9 +916,14 @@ async def collect_free_parking(request: CollectFreeParkingRequest):
         raise HTTPException(status_code=404, detail="Player not found")
     
     amount = game_state.free_parking_pot
-    game_state.players[request.player_id].cash += amount
-    game_state.free_parking_pot = 0
-    save_game_state()
+    if amount > 0:
+        game_state.players[request.player_id].cash += amount
+        game_state.free_parking_pot = 0
+        
+        player_name = get_player_name(request.player_id)
+        add_transaction("free_parking", "Free Parking", player_name, amount, f"{player_name} collected £{amount} from Free Parking")
+        
+        save_game_state()
     
     return {
         "message": f"Collected £{amount} from Free Parking",
@@ -880,8 +939,14 @@ async def reset_game():
     game_state.free_parking_pot = 0
     game_state.next_player_id = 1
     game_state.version = "london"
+    game_state.transactions.clear()
+    game_state.next_transaction_id = 1
     save_game_state()
     return {"message": "Game reset"}
+
+@app.get("/transactions")
+async def get_transactions():
+    return {"transactions": [t.model_dump() for t in game_state.transactions]}
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 
