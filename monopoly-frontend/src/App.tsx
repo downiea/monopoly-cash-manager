@@ -327,7 +327,8 @@ function App() {
     setRentPropertyId(propertyId)
     setRentOwnerId(ownerId)
     setRentDiceRoll('')
-    setSelectedPlayer(null)
+    const currentTurnPlayerId = gameState?.turn_order[gameState?.current_turn_index]
+    setSelectedPlayer(currentTurnPlayerId !== ownerId ? currentTurnPlayerId ?? null : null)
     setPayRentDialogOpen(true)
   }
 
