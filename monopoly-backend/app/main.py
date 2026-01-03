@@ -359,6 +359,8 @@ class GameState:
         self.version: str = "london"
         self.transactions: list[Transaction] = []
         self.next_transaction_id: int = 1
+        self.turn_order: list[int] = []
+        self.current_turn_index: int = 0
 
 def save_game_state():
     data = {
@@ -370,6 +372,8 @@ def save_game_state():
         "version": game_state.version,
         "transactions": [t.model_dump() for t in game_state.transactions],
         "next_transaction_id": game_state.next_transaction_id,
+        "turn_order": game_state.turn_order,
+        "current_turn_index": game_state.current_turn_index,
     }
     with open(SAVE_FILE, "w") as f:
         json.dump(data, f, indent=2)
@@ -388,6 +392,8 @@ def load_game_state():
         game_state.version = data.get("version", "london")
         game_state.transactions = [Transaction(**t) for t in data.get("transactions", [])]
         game_state.next_transaction_id = data.get("next_transaction_id", 1)
+        game_state.turn_order = data.get("turn_order", [])
+        game_state.current_turn_index = data.get("current_turn_index", 0)
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
 
@@ -482,6 +488,9 @@ class SellAllPropertiesRequest(BaseModel):
 class CashOutRequest(BaseModel):
     player_id: int
 
+class ReorderPlayersRequest(BaseModel):
+    turn_order: List[int]
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -536,7 +545,9 @@ async def get_game_state():
         "free_parking_pot": game_state.free_parking_pot,
         "available_properties": available_props,
         "version": game_state.version,
-        "versions": GAME_VERSIONS
+        "versions": GAME_VERSIONS,
+        "turn_order": game_state.turn_order,
+        "current_turn_index": game_state.current_turn_index
     }
 
 @app.get("/properties")
@@ -559,6 +570,7 @@ async def create_player(request: CreatePlayerRequest):
         name=request.name
     )
     game_state.players[player.id] = player
+    game_state.turn_order.append(player.id)
     game_state.next_player_id += 1
     save_game_state()
     
@@ -574,6 +586,14 @@ async def remove_player(player_id: int):
         del game_state.property_owners[prop_id]
         if prop_id in game_state.owned_properties:
             del game_state.owned_properties[prop_id]
+    
+    if player_id in game_state.turn_order:
+        removed_index = game_state.turn_order.index(player_id)
+        game_state.turn_order.remove(player_id)
+        if game_state.current_turn_index >= len(game_state.turn_order) and len(game_state.turn_order) > 0:
+            game_state.current_turn_index = 0
+        elif removed_index < game_state.current_turn_index:
+            game_state.current_turn_index -= 1
     
     del game_state.players[player_id]
     save_game_state()
@@ -1159,6 +1179,32 @@ async def cash_out(request: CashOutRequest):
         "player_cash": player.cash
     }
 
+@app.post("/turn/next")
+async def next_turn():
+    if len(game_state.turn_order) == 0:
+        raise HTTPException(status_code=400, detail="No players in turn order")
+    game_state.current_turn_index = (game_state.current_turn_index + 1) % len(game_state.turn_order)
+    save_game_state()
+    current_player_id = game_state.turn_order[game_state.current_turn_index]
+    return {
+        "current_turn_index": game_state.current_turn_index,
+        "current_player_id": current_player_id,
+        "current_player_name": get_player_name(current_player_id)
+    }
+
+@app.post("/turn/reorder")
+async def reorder_players(request: ReorderPlayersRequest):
+    if set(request.turn_order) != set(game_state.turn_order):
+        raise HTTPException(status_code=400, detail="Invalid turn order - must contain same players")
+    current_player_id = game_state.turn_order[game_state.current_turn_index] if game_state.turn_order else None
+    game_state.turn_order = request.turn_order
+    if current_player_id is not None and current_player_id in game_state.turn_order:
+        game_state.current_turn_index = game_state.turn_order.index(current_player_id)
+    else:
+        game_state.current_turn_index = 0
+    save_game_state()
+    return {"turn_order": game_state.turn_order, "current_turn_index": game_state.current_turn_index}
+
 @app.post("/game/reset")
 async def reset_game():
     game_state.players.clear()
@@ -1169,6 +1215,8 @@ async def reset_game():
     game_state.version = "london"
     game_state.transactions.clear()
     game_state.next_transaction_id = 1
+    game_state.turn_order.clear()
+    game_state.current_turn_index = 0
     save_game_state()
     return {"message": "Game reset"}
 

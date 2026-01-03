@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft, Plus, CircleDollarSign, Receipt, Settings, MoreHorizontal } from 'lucide-react'
+import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft, Plus, CircleDollarSign, Receipt, Settings, MoreHorizontal, ChevronRight, ChevronUp, ChevronDown, Play } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -68,6 +68,8 @@ interface GameState {
   available_properties: Property[]
   version: string
   versions: string[]
+  turn_order: number[]
+  current_turn_index: number
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -325,7 +327,8 @@ function App() {
     setRentPropertyId(propertyId)
     setRentOwnerId(ownerId)
     setRentDiceRoll('')
-    setSelectedPlayer(null)
+    const currentTurnPlayerId = gameState?.turn_order[gameState?.current_turn_index]
+    setSelectedPlayer(currentTurnPlayerId !== ownerId ? currentTurnPlayerId ?? null : null)
     setPayRentDialogOpen(true)
   }
 
@@ -550,6 +553,38 @@ function App() {
       savePredefinedAmounts(newAmounts)
     }
 
+    const nextTurn = async () => {
+      await handleApiCall('/turn/next', 'POST')
+    }
+
+    const reorderPlayers = async (newOrder: number[]) => {
+      await handleApiCall('/turn/reorder', 'POST', { turn_order: newOrder })
+    }
+
+    const movePlayerUp = (playerId: number) => {
+      const currentIndex = gameState.turn_order.indexOf(playerId)
+      if (currentIndex > 0) {
+        const newOrder = [...gameState.turn_order]
+        newOrder[currentIndex] = newOrder[currentIndex - 1]
+        newOrder[currentIndex - 1] = playerId
+        reorderPlayers(newOrder)
+      }
+    }
+
+    const movePlayerDown = (playerId: number) => {
+      const currentIndex = gameState.turn_order.indexOf(playerId)
+      if (currentIndex < gameState.turn_order.length - 1) {
+        const newOrder = [...gameState.turn_order]
+        newOrder[currentIndex] = newOrder[currentIndex + 1]
+        newOrder[currentIndex + 1] = playerId
+        reorderPlayers(newOrder)
+      }
+    }
+
+    const getPlayerById = (playerId: number) => {
+      return gameState.players.find(p => p.id === playerId)
+    }
+
     if (!gameState) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -637,6 +672,53 @@ function App() {
                     </Button>
                   </div>
                 </div>
+
+        {gameState.turn_order.length > 0 && (
+          <div className="bg-white rounded-lg p-3 mb-4 shadow">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-gray-700">Turn Order:</span>
+              <div className="flex items-center gap-1 flex-wrap">
+                {gameState.turn_order.map((playerId, index) => {
+                  const player = getPlayerById(playerId)
+                  const isCurrentTurn = index === gameState.current_turn_index
+                  return (
+                    <div key={playerId} className="flex items-center gap-1">
+                      {index > 0 && <ChevronRight className="h-4 w-4 text-gray-400" />}
+                      <div className={`flex items-center gap-1 px-2 py-1 rounded ${isCurrentTurn ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-700'}`}>
+                        {isCurrentTurn && <Play className="h-3 w-3" />}
+                        <span className="text-sm font-medium">{player?.name || 'Unknown'}</span>
+                        <div className="flex flex-col">
+                          <button
+                            onClick={() => movePlayerUp(playerId)}
+                            disabled={index === 0}
+                            className="p-0 h-3 hover:bg-gray-200 rounded disabled:opacity-30"
+                          >
+                            <ChevronUp className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => movePlayerDown(playerId)}
+                            disabled={index === gameState.turn_order.length - 1}
+                            className="p-0 h-3 hover:bg-gray-200 rounded disabled:opacity-30"
+                          >
+                            <ChevronDown className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto bg-blue-100 hover:bg-blue-200 text-blue-800"
+                onClick={nextTurn}
+              >
+                Next Turn
+              </Button>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
