@@ -6,9 +6,30 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft, Plus, CircleDollarSign, Receipt } from 'lucide-react'
+import { Users, Building2, Train, Zap, ParkingCircle, Banknote, Home, Hotel, RefreshCw, ArrowRightLeft, Plus, CircleDollarSign, Receipt, Settings, MoreHorizontal } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.1.91:8000'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+const DEFAULT_PREDEFINED_AMOUNTS = [10, 15, 50, 100, 200]
+
+function loadPredefinedAmounts(): number[] {
+  try {
+    const saved = localStorage.getItem('monopoly_predefined_amounts')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed) && parsed.every(n => typeof n === 'number')) {
+        return parsed
+      }
+    }
+    } catch {
+      // Ignore parse errors, use defaults
+    }
+    return DEFAULT_PREDEFINED_AMOUNTS
+}
+
+function savePredefinedAmounts(amounts: number[]) {
+  localStorage.setItem('monopoly_predefined_amounts', JSON.stringify(amounts))
+}
 
 interface Property {
   property_id: string
@@ -147,12 +168,24 @@ function App() {
   const [payFromBankDialogOpen, setPayFromBankDialogOpen] = useState(false)
   const [payFromBankPlayerId, setPayFromBankPlayerId] = useState<number | null>(null)
   const [payFromBankAmount, setPayFromBankAmount] = useState('')
-  const [payEveryoneDialogOpen, setPayEveryoneDialogOpen] = useState(false)
-  const [payEveryonePlayerId, setPayEveryonePlayerId] = useState<number | null>(null)
-  const [payEveryoneAmount, setPayEveryoneAmount] = useState('')
-  const [transactions, setTransactions] = useState<Transaction[]>([])
+    const [payEveryoneDialogOpen, setPayEveryoneDialogOpen] = useState(false)
+    const [payEveryonePlayerId, setPayEveryonePlayerId] = useState<number | null>(null)
+    const [payEveryoneAmount, setPayEveryoneAmount] = useState('')
+    const [receiveAllDialogOpen, setReceiveAllDialogOpen] = useState(false)
+    const [receiveAllPlayerId, setReceiveAllPlayerId] = useState<number | null>(null)
+    const [receiveAllAmount, setReceiveAllAmount] = useState('')
+    const [transactions, setTransactions] = useState<Transaction[]>([])
+  
+    const [configDialogOpen, setConfigDialogOpen] = useState(false)
+    const [predefinedAmounts, setPredefinedAmounts] = useState<number[]>(loadPredefinedAmounts)
+    const [newAmount, setNewAmount] = useState('')
+  
+    const [actionsDialogOpen, setActionsDialogOpen] = useState(false)
+    const [actionsPlayerId, setActionsPlayerId] = useState<number | null>(null)
+    const [actionsTargetPlayer, setActionsTargetPlayer] = useState<string>('')
+    const [payFineAmount, setPayFineAmount] = useState('')
 
-  const fetchGameState = useCallback(async () => {
+    const fetchGameState= useCallback(async () => {
     try {
       const [stateResponse, transactionsResponse] = await Promise.all([
         fetch(`${API_URL}/game/state`),
@@ -163,10 +196,10 @@ function App() {
       setGameState(stateData)
       setTransactions(transactionsData.transactions || [])
       setError(null)
-    } catch (err) {
-      setError('Failed to fetch game state')
-    }
-  }, [])
+      } catch {
+        setError('Failed to fetch game state')
+      }
+    }, [])
 
   useEffect(() => {
     fetchGameState()
@@ -264,14 +297,7 @@ function App() {
     })
   }
 
-  const openPayDialog = (playerId: number) => {
-    setTransferFrom(playerId.toString())
-    setTransferTo('')
-    setTransferAmount('')
-    setTransferDialogOpen(true)
-  }
-
-  const payRent = async (fromPlayerId: number, propertyId: string, dice?: number) => {
+    const payRent= async (fromPlayerId: number, propertyId: string, dice?: number) => {
     await handleApiCall('/rent/pay', 'POST', {
       from_player_id: fromPlayerId,
       property_id: propertyId,
@@ -443,13 +469,88 @@ function App() {
     setPayEveryoneAmount('')
   }
 
-  const openPayEveryoneDialog = (playerId: number) => {
-    setPayEveryonePlayerId(playerId)
-    setPayEveryoneAmount('')
-    setPayEveryoneDialogOpen(true)
-  }
+    const openPayEveryoneDialog = (playerId: number) => {
+      setPayEveryonePlayerId(playerId)
+      setPayEveryoneAmount('')
+      setPayEveryoneDialogOpen(true)
+    }
 
-  if (!gameState) {
+    const receiveFromAll = async (playerId: number, amount: number) => {
+      await handleApiCall('/receive-from-all', 'POST', {
+        player_id: playerId,
+        amount,
+      })
+      setReceiveAllDialogOpen(false)
+      setReceiveAllPlayerId(null)
+      setReceiveAllAmount('')
+    }
+
+    const openReceiveAllDialog = (playerId: number) => {
+      setReceiveAllPlayerId(playerId)
+      setReceiveAllAmount('')
+      setReceiveAllDialogOpen(true)
+    }
+
+    const openActionsDialog = (playerId: number) => {
+      setActionsPlayerId(playerId)
+      setActionsTargetPlayer('')
+      setActionsDialogOpen(true)
+    }
+
+    const transferAllCash = async (fromPlayerId: number, toPlayerId: number) => {
+      await handleApiCall('/transfer-all-cash', 'POST', {
+        from_player_id: fromPlayerId,
+        to_player_id: toPlayerId,
+      })
+      setActionsDialogOpen(false)
+    }
+
+    const transferAllProperties = async (fromPlayerId: number, toPlayerId: number) => {
+      await handleApiCall('/transfer-all-properties', 'POST', {
+        from_player_id: fromPlayerId,
+        to_player_id: toPlayerId,
+      })
+      setActionsDialogOpen(false)
+    }
+
+    const sellAllBuildings = async (playerId: number) => {
+      await handleApiCall('/sell-all-buildings', 'POST', {
+        player_id: playerId,
+      })
+      setActionsDialogOpen(false)
+    }
+
+    const sellAllProperties = async (playerId: number) => {
+      await handleApiCall('/sell-all-properties', 'POST', {
+        player_id: playerId,
+      })
+      setActionsDialogOpen(false)
+    }
+
+    const cashOut = async (playerId: number) => {
+      await handleApiCall('/cash-out', 'POST', {
+        player_id: playerId,
+      })
+      setActionsDialogOpen(false)
+    }
+
+    const addPredefinedAmount = () => {
+      const amount = parseInt(newAmount)
+      if (!isNaN(amount) && amount > 0 && !predefinedAmounts.includes(amount)) {
+        const newAmounts = [...predefinedAmounts, amount].sort((a, b) => a - b)
+        setPredefinedAmounts(newAmounts)
+        savePredefinedAmounts(newAmounts)
+        setNewAmount('')
+      }
+    }
+
+    const removePredefinedAmount = (amount: number) => {
+      const newAmounts = predefinedAmounts.filter(a => a !== amount)
+      setPredefinedAmounts(newAmounts)
+      savePredefinedAmounts(newAmounts)
+    }
+
+    if (!gameState) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="text-xl">Loading...</div>
@@ -519,15 +620,23 @@ function App() {
               Add Player
             </Button>
 
-            <Button onClick={fetchGameState} variant="outline" size="sm" disabled={loading} className="bg-white">
-              <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-            <Button onClick={resetGame} variant="destructive" size="sm">
-              Reset Game
-            </Button>
-          </div>
-        </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="bg-white"
+                      onClick={() => setConfigDialogOpen(true)}
+                    >
+                      <Settings className="h-4 w-4" />
+                    </Button>
+                    <Button onClick={fetchGameState} variant="outline" size="sm" disabled={loading} className="bg-white">
+                      <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </Button>
+                    <Button onClick={resetGame} variant="destructive" size="sm">
+                      Reset Game
+                    </Button>
+                  </div>
+                </div>
 
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
@@ -684,90 +793,282 @@ function App() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={payFineDialogOpen} onOpenChange={setPayFineDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Receipt className="h-5 w-5" />
-                Pay Fine/Tax to Free Parking
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-2">
-                <Button onClick={() => payFinePlayerId && payFine(payFinePlayerId, 10)} className="w-full">£10</Button>
-                <Button onClick={() => payFinePlayerId && payFine(payFinePlayerId, 50)} className="w-full">£50</Button>
-                <Button onClick={() => payFinePlayerId && payFine(payFinePlayerId, 100)} className="w-full">£100</Button>
-                <Button onClick={() => payFinePlayerId && payFine(payFinePlayerId, 200)} className="w-full">£200</Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+                <Dialog open={payFineDialogOpen} onOpenChange={setPayFineDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <Receipt className="h-5 w-5" />
+                        Pay Fine/Tax to Free Parking
+                      </DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap gap-2">
+                        {predefinedAmounts.map(amount => (
+                          <Button
+                            key={amount}
+                            variant="outline"
+                            onClick={() => payFinePlayerId && payFine(payFinePlayerId, amount)}
+                          >
+                            £{amount}
+                          </Button>
+                        ))}
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-600">Or enter custom amount:</label>
+                        <Input
+                          type="number"
+                          placeholder="£"
+                          value={payFineAmount}
+                          onChange={e => setPayFineAmount(e.target.value)}
+                        />
+                      </div>
+                      <Button
+                        onClick={() => payFinePlayerId && payFineAmount && payFine(payFinePlayerId, parseInt(payFineAmount))}
+                        disabled={!payFineAmount}
+                        className="w-full"
+                      >
+                        Pay £{payFineAmount || 0}
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
 
-        <Dialog open={payFromBankDialogOpen} onOpenChange={setPayFromBankDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Banknote className="h-5 w-5" />
-                Receive from Bank
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-gray-600">Amount</label>
-                <Input
-                  type="number"
-                  placeholder="£"
-                  value={payFromBankAmount}
-                  onChange={e => setPayFromBankAmount(e.target.value)}
-                />
-              </div>
-              <Button
-                onClick={() => payFromBankPlayerId && payFromBankAmount && payFromBank(payFromBankPlayerId, parseInt(payFromBankAmount))}
-                disabled={!payFromBankAmount}
-                className="w-full"
-              >
-                Receive £{payFromBankAmount || 0}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+                <Dialog open={payFromBankDialogOpen} onOpenChange={setPayFromBankDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <Banknote className="h-5 w-5" />
+                        Receive from Bank
+                      </DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap gap-2">
+                        {predefinedAmounts.map(amount => (
+                          <Button
+                            key={amount}
+                            variant="outline"
+                            onClick={() => payFromBankPlayerId && payFromBank(payFromBankPlayerId, amount)}
+                          >
+                            £{amount}
+                          </Button>
+                        ))}
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-600">Or enter custom amount:</label>
+                        <Input
+                          type="number"
+                          placeholder="£"
+                          value={payFromBankAmount}
+                          onChange={e => setPayFromBankAmount(e.target.value)}
+                        />
+                      </div>
+                      <Button
+                        onClick={() => payFromBankPlayerId && payFromBankAmount && payFromBank(payFromBankPlayerId, parseInt(payFromBankAmount))}
+                        disabled={!payFromBankAmount}
+                        className="w-full"
+                      >
+                        Receive £{payFromBankAmount || 0}
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
 
-        <Dialog open={payEveryoneDialogOpen} onOpenChange={setPayEveryoneDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Users className="h-5 w-5" />
-                Pay Everyone
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-gray-600">Amount to pay each player</label>
-                <Input
-                  type="number"
-                  placeholder="£"
-                  value={payEveryoneAmount}
-                  onChange={e => setPayEveryoneAmount(e.target.value)}
-                />
-              </div>
-              <div className="text-sm text-gray-500">
-                Total: £{(parseInt(payEveryoneAmount) || 0) * (gameState.players.length - 1)} to {gameState.players.length - 1} players
-              </div>
-              <Button
-                onClick={() => payEveryonePlayerId && payEveryoneAmount && payEveryone(payEveryonePlayerId, parseInt(payEveryoneAmount))}
-                disabled={!payEveryoneAmount}
-                className="w-full"
-              >
-                Pay Everyone £{payEveryoneAmount || 0}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+                <Dialog open={payEveryoneDialogOpen} onOpenChange={setPayEveryoneDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <Users className="h-5 w-5" />
+                        Pay Everyone
+                      </DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap gap-2">
+                        {predefinedAmounts.map(amount => (
+                          <Button
+                            key={amount}
+                            variant="outline"
+                            onClick={() => payEveryonePlayerId && payEveryone(payEveryonePlayerId, amount)}
+                          >
+                            £{amount}
+                          </Button>
+                        ))}
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-600">Or enter custom amount per player:</label>
+                        <Input
+                          type="number"
+                          placeholder="£"
+                          value={payEveryoneAmount}
+                          onChange={e => setPayEveryoneAmount(e.target.value)}
+                        />
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        Total: £{(parseInt(payEveryoneAmount) || 0) * (gameState.players.length - 1)} to {gameState.players.length - 1} players
+                      </div>
+                      <Button
+                        onClick={() => payEveryonePlayerId && payEveryoneAmount && payEveryone(payEveryonePlayerId, parseInt(payEveryoneAmount))}
+                        disabled={!payEveryoneAmount}
+                        className="w-full"
+                      >
+                        Pay Everyone £{payEveryoneAmount || 0}
+                      </Button>
+                    </div>
+                  </DialogContent>
+                        </Dialog>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {gameState.players.map(player => {
-            const { properties: regularProps, stations, utilities } = separatePropertiesByType(player.properties)
-            const ownedColorGroups = getOwnedColorGroups(player.properties)
+                <Dialog open={receiveAllDialogOpen} onOpenChange={setReceiveAllDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <Users className="h-5 w-5" />
+                        Receive from Everyone
+                      </DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap gap-2">
+                        {predefinedAmounts.map(amount => (
+                          <Button
+                            key={amount}
+                            variant="outline"
+                            onClick={() => receiveAllPlayerId && receiveFromAll(receiveAllPlayerId, amount)}
+                          >
+                            £{amount}
+                          </Button>
+                        ))}
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-600">Or enter custom amount per player:</label>
+                        <Input
+                          type="number"
+                          placeholder="£"
+                          value={receiveAllAmount}
+                          onChange={e => setReceiveAllAmount(e.target.value)}
+                        />
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        Total: £{(parseInt(receiveAllAmount) || 0) * (gameState.players.length - 1)} from {gameState.players.length - 1} players
+                      </div>
+                      <Button
+                        onClick={() => receiveAllPlayerId && receiveAllAmount && receiveFromAll(receiveAllPlayerId, parseInt(receiveAllAmount))}
+                        disabled={!receiveAllAmount}
+                        className="w-full"
+                      >
+                        Receive £{receiveAllAmount || 0} from Everyone
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={actionsDialogOpen} onOpenChange={setActionsDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Player Actions</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-sm text-gray-600 mb-2 block">Transfer to player:</label>
+                        <Select value={actionsTargetPlayer} onValueChange={setActionsTargetPlayer}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select target player" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {gameState.players
+                              .filter(p => p.id !== actionsPlayerId)
+                              .map(p => (
+                                <SelectItem key={p.id} value={p.id.toString()}>
+                                  {p.name} (£{p.cash})
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          variant="outline"
+                          disabled={!actionsTargetPlayer}
+                          onClick={() => actionsPlayerId && actionsTargetPlayer && transferAllCash(actionsPlayerId, parseInt(actionsTargetPlayer))}
+                        >
+                          Transfer All Cash
+                        </Button>
+                        <Button
+                          variant="outline"
+                          disabled={!actionsTargetPlayer}
+                          onClick={() => actionsPlayerId && actionsTargetPlayer && transferAllProperties(actionsPlayerId, parseInt(actionsTargetPlayer))}
+                        >
+                          Transfer All Properties
+                        </Button>
+                      </div>
+                      <div className="border-t pt-4">
+                        <label className="text-sm text-gray-600 mb-2 block">Sell to Bank:</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            variant="outline"
+                            className="bg-orange-50 hover:bg-orange-100"
+                            onClick={() => actionsPlayerId && sellAllBuildings(actionsPlayerId)}
+                          >
+                            Sell All Buildings
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="bg-orange-50 hover:bg-orange-100"
+                            onClick={() => actionsPlayerId && sellAllProperties(actionsPlayerId)}
+                          >
+                            Sell All Properties
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="border-t pt-4">
+                        <Button
+                          variant="destructive"
+                          className="w-full"
+                          onClick={() => actionsPlayerId && cashOut(actionsPlayerId)}
+                        >
+                          Cash Out (Sell Everything)
+                        </Button>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={configDialogOpen} onOpenChange={setConfigDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Configure Predefined Amounts</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="text-sm text-gray-600">
+                        These amounts will appear as quick buttons in Fine/Tax, From Bank, Pay All, and Receive All dialogs.
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {predefinedAmounts.map(amount => (
+                          <Badge
+                            key={amount}
+                            variant="secondary"
+                            className="cursor-pointer hover:bg-red-100"
+                            onClick={() => removePredefinedAmount(amount)}
+                          >
+                            £{amount} ×
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <Input
+                          type="number"
+                          placeholder="New amount"
+                          value={newAmount}
+                          onChange={e => setNewAmount(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && addPredefinedAmount()}
+                        />
+                        <Button onClick={addPredefinedAmount}>Add</Button>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+                  {gameState.players.map(player => {
+                    const { properties: regularProps, stations, utilities } = separatePropertiesByType(player.properties)
+                    const ownedColorGroups = getOwnedColorGroups(player.properties)
             
             const renderPropertyTile = (prop: Property) => {
               const ownsColorGroup = prop.type === 'property' && ownedColorGroups.includes(prop.color)
@@ -857,18 +1158,17 @@ function App() {
                         </Button>
                         <Dialog>
                           <DialogTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="h-6 text-xs px-2 bg-blue-200 hover:bg-blue-300"
-                              onClick={() => {
-                                setTransferPropertyTo('')
-                                setTransferPropertyPrice('')
-                              }}
-                            >
-                              <ArrowRightLeft className="h-3 w-3 mr-1" />
-                              Transfer
-                            </Button>
+                                                        <Button
+                                                          size="sm"
+                                                          variant="secondary"
+                                                          className="h-6 text-xs px-1 bg-blue-200 hover:bg-blue-300"
+                                                          onClick={() => {
+                                                            setTransferPropertyTo('')
+                                                            setTransferPropertyPrice('')
+                                                          }}
+                                                        >
+                                                          <ArrowRightLeft className="h-3 w-3" />T
+                                                        </Button>
                           </DialogTrigger>
                           <DialogContent>
                             <DialogHeader>
@@ -953,47 +1253,55 @@ function App() {
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-3xl font-bold text-green-600">£{player.cash}</div>
                     <div className="flex gap-2 flex-wrap">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-green-100 hover:bg-green-200 text-green-800"
-                        onClick={() => passGo(player.id)}
-                      >
-                        GO +£200
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-blue-100 hover:bg-blue-200 text-blue-800"
-                        onClick={() => openPayDialog(player.id)}
-                      >
-                        PAY
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-orange-100 hover:bg-orange-200 text-orange-800"
-                        onClick={() => openPayFineDialog(player.id)}
-                      >
-                        Fine/Tax
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-purple-100 hover:bg-purple-200 text-purple-800"
-                        onClick={() => openPayFromBankDialog(player.id)}
-                      >
-                        From Bank
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-pink-100 hover:bg-pink-200 text-pink-800"
-                        onClick={() => openPayEveryoneDialog(player.id)}
-                      >
-                        Pay All
-                      </Button>
-                    </div>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="bg-green-100 hover:bg-green-200 text-green-800"
+                                            onClick={() => passGo(player.id)}
+                                          >
+                                            GO +£200
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="bg-orange-100 hover:bg-orange-200 text-orange-800"
+                                            onClick={() => openPayFineDialog(player.id)}
+                                          >
+                                            Fine/Tax
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="bg-purple-100 hover:bg-purple-200 text-purple-800"
+                                            onClick={() => openPayFromBankDialog(player.id)}
+                                          >
+                                            From Bank
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="bg-pink-100 hover:bg-pink-200 text-pink-800"
+                                            onClick={() => openPayEveryoneDialog(player.id)}
+                                          >
+                                            Pay All
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="bg-teal-100 hover:bg-teal-200 text-teal-800"
+                                            onClick={() => openReceiveAllDialog(player.id)}
+                                          >
+                                            Receive All
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="bg-gray-100 hover:bg-gray-200 text-gray-800"
+                                            onClick={() => openActionsDialog(player.id)}
+                                          >
+                                            <MoreHorizontal className="h-4 w-4" />
+                                          </Button>
+                                        </div>
                   </div>
 
                   <div className="space-y-3">

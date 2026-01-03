@@ -461,6 +461,27 @@ class TransferPropertyRequest(BaseModel):
 class SetVersionRequest(BaseModel):
     version: str
 
+class ReceiveFromAllRequest(BaseModel):
+    player_id: int
+    amount: int
+
+class TransferAllCashRequest(BaseModel):
+    from_player_id: int
+    to_player_id: int
+
+class TransferAllPropertiesRequest(BaseModel):
+    from_player_id: int
+    to_player_id: int
+
+class SellAllBuildingsRequest(BaseModel):
+    player_id: int
+
+class SellAllPropertiesRequest(BaseModel):
+    player_id: int
+
+class CashOutRequest(BaseModel):
+    player_id: int
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -929,6 +950,213 @@ async def collect_free_parking(request: CollectFreeParkingRequest):
         "message": f"Collected £{amount} from Free Parking",
         "amount": amount,
         "player_cash": game_state.players[request.player_id].cash
+    }
+
+@app.post("/receive-from-all")
+async def receive_from_all(request: ReceiveFromAllRequest):
+    if request.player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    receiver = game_state.players[request.player_id]
+    total_received = 0
+    
+    for player_id, player in game_state.players.items():
+        if player_id != request.player_id:
+            if player.cash < request.amount:
+                raise HTTPException(status_code=400, detail=f"{player.name} has insufficient funds")
+            player.cash -= request.amount
+            receiver.cash += request.amount
+            total_received += request.amount
+            add_transaction("transfer", player.name, receiver.name, request.amount, f"{player.name} paid £{request.amount} to {receiver.name}")
+    
+    save_game_state()
+    return {
+        "message": f"{receiver.name} received £{total_received} from all players",
+        "total_received": total_received,
+        "player_cash": receiver.cash
+    }
+
+@app.post("/transfer-all-cash")
+async def transfer_all_cash(request: TransferAllCashRequest):
+    if request.from_player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="From player not found")
+    if request.to_player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="To player not found")
+    
+    from_player = game_state.players[request.from_player_id]
+    to_player = game_state.players[request.to_player_id]
+    
+    amount = from_player.cash
+    from_player.cash = 0
+    to_player.cash += amount
+    
+    add_transaction("transfer", from_player.name, to_player.name, amount, f"{from_player.name} transferred all cash (£{amount}) to {to_player.name}")
+    save_game_state()
+    
+    return {
+        "message": f"Transferred £{amount} from {from_player.name} to {to_player.name}",
+        "amount": amount,
+        "from_player_cash": from_player.cash,
+        "to_player_cash": to_player.cash
+    }
+
+@app.post("/transfer-all-properties")
+async def transfer_all_properties(request: TransferAllPropertiesRequest):
+    if request.from_player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="From player not found")
+    if request.to_player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="To player not found")
+    
+    from_player = game_state.players[request.from_player_id]
+    to_player = game_state.players[request.to_player_id]
+    
+    properties_to_transfer = [pid for pid, owner_id in game_state.property_owners.items() if owner_id == request.from_player_id]
+    
+    for prop_id in properties_to_transfer:
+        owned_prop = game_state.owned_properties.get(prop_id)
+        if owned_prop and (owned_prop.houses > 0 or owned_prop.has_hotel):
+            raise HTTPException(status_code=400, detail=f"Must sell all buildings on {get_display_name(prop_id)} before transferring")
+    
+    for prop_id in properties_to_transfer:
+        game_state.property_owners[prop_id] = request.to_player_id
+    
+    add_transaction("transfer", from_player.name, to_player.name, 0, f"{from_player.name} transferred {len(properties_to_transfer)} properties to {to_player.name}")
+    save_game_state()
+    
+    return {
+        "message": f"Transferred {len(properties_to_transfer)} properties from {from_player.name} to {to_player.name}",
+        "properties_transferred": len(properties_to_transfer)
+    }
+
+@app.post("/sell-all-buildings")
+async def sell_all_buildings(request: SellAllBuildingsRequest):
+    if request.player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    player = game_state.players[request.player_id]
+    total_value = 0
+    buildings_sold = 0
+    
+    player_properties = [pid for pid, owner_id in game_state.property_owners.items() if owner_id == request.player_id]
+    
+    for prop_id in player_properties:
+        owned_prop = game_state.owned_properties.get(prop_id)
+        if owned_prop and (owned_prop.houses > 0 or owned_prop.has_hotel):
+            prop_data = PROPERTIES_DATA[prop_id]
+            sell_value = prop_data.get("house_cost", 0) // 2
+            
+            if owned_prop.has_hotel:
+                total_value += sell_value * 5  # Hotel = 5 houses worth
+                buildings_sold += 5
+                owned_prop.has_hotel = False
+                owned_prop.houses = 0
+            else:
+                total_value += sell_value * owned_prop.houses
+                buildings_sold += owned_prop.houses
+                owned_prop.houses = 0
+    
+    player.cash += total_value
+    add_transaction("sale", player.name, "Bank", total_value, f"{player.name} sold {buildings_sold} buildings for £{total_value}")
+    save_game_state()
+    
+    return {
+        "message": f"Sold {buildings_sold} buildings for £{total_value}",
+        "buildings_sold": buildings_sold,
+        "total_value": total_value,
+        "player_cash": player.cash
+    }
+
+@app.post("/sell-all-properties")
+async def sell_all_properties(request: SellAllPropertiesRequest):
+    if request.player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    player = game_state.players[request.player_id]
+    total_value = 0
+    properties_sold = 0
+    
+    player_properties = [pid for pid, owner_id in game_state.property_owners.items() if owner_id == request.player_id]
+    
+    for prop_id in player_properties:
+        owned_prop = game_state.owned_properties.get(prop_id)
+        if owned_prop and (owned_prop.houses > 0 or owned_prop.has_hotel):
+            raise HTTPException(status_code=400, detail=f"Must sell all buildings on {get_display_name(prop_id)} first")
+        
+        prop_data = PROPERTIES_DATA[prop_id]
+        sale_value = prop_data["purchase_cost"]
+        if owned_prop and owned_prop.is_mortgaged:
+            sale_value = prop_data["purchase_cost"] - prop_data["mortgage_value"]
+        
+        total_value += sale_value
+        properties_sold += 1
+        
+        del game_state.property_owners[prop_id]
+        del game_state.owned_properties[prop_id]
+    
+    player.cash += total_value
+    add_transaction("sale", player.name, "Bank", total_value, f"{player.name} sold {properties_sold} properties for £{total_value}")
+    save_game_state()
+    
+    return {
+        "message": f"Sold {properties_sold} properties for £{total_value}",
+        "properties_sold": properties_sold,
+        "total_value": total_value,
+        "player_cash": player.cash
+    }
+
+@app.post("/cash-out")
+async def cash_out(request: CashOutRequest):
+    if request.player_id not in game_state.players:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    player = game_state.players[request.player_id]
+    total_value = 0
+    buildings_sold = 0
+    properties_sold = 0
+    
+    player_properties = [pid for pid, owner_id in game_state.property_owners.items() if owner_id == request.player_id]
+    
+    # First sell all buildings
+    for prop_id in player_properties:
+        owned_prop = game_state.owned_properties.get(prop_id)
+        if owned_prop and (owned_prop.houses > 0 or owned_prop.has_hotel):
+            prop_data = PROPERTIES_DATA[prop_id]
+            sell_value = prop_data.get("house_cost", 0) // 2
+            
+            if owned_prop.has_hotel:
+                total_value += sell_value * 5
+                buildings_sold += 5
+                owned_prop.has_hotel = False
+                owned_prop.houses = 0
+            else:
+                total_value += sell_value * owned_prop.houses
+                buildings_sold += owned_prop.houses
+                owned_prop.houses = 0
+    
+    # Then sell all properties
+    for prop_id in player_properties:
+        owned_prop = game_state.owned_properties.get(prop_id)
+        prop_data = PROPERTIES_DATA[prop_id]
+        sale_value = prop_data["purchase_cost"]
+        if owned_prop and owned_prop.is_mortgaged:
+            sale_value = prop_data["purchase_cost"] - prop_data["mortgage_value"]
+        
+        total_value += sale_value
+        properties_sold += 1
+        
+        del game_state.property_owners[prop_id]
+        del game_state.owned_properties[prop_id]
+    
+    player.cash += total_value
+    add_transaction("sale", player.name, "Bank", total_value, f"{player.name} cashed out: sold {buildings_sold} buildings and {properties_sold} properties for £{total_value}")
+    save_game_state()
+    
+    return {
+        "message": f"Cashed out: sold {buildings_sold} buildings and {properties_sold} properties for £{total_value}",
+        "buildings_sold": buildings_sold,
+        "properties_sold": properties_sold,
+        "total_value": total_value,
+        "player_cash": player.cash
     }
 
 @app.post("/game/reset")
