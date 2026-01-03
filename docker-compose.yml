@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./monopoly-backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - game_data:/data
+    environment:
+      - SAVE_FILE=/data/game_state.json
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./monopoly-frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://${HOST_IP:-localhost}:8000
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  game_data:

@@ -9,7 +9,7 @@ from datetime import datetime
 import os
 import json
 
-SAVE_FILE = os.path.join(os.path.dirname(__file__), "..", "game_state.json")
+SAVE_FILE = os.environ.get("SAVE_FILE", os.path.join(os.path.dirname(__file__), "..", "game_state.json"))
 
 app = FastAPI()
 
